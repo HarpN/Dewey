@@ -1,0 +1,5 @@
+apiVersion: v2
+name: dewey
+version: 0.1.0
+appVersion: "0.1.0"
+description: Dewey execution-zone secure write gateway

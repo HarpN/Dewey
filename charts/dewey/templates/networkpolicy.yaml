@@ -1,0 +1,37 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dewey.fullname" . }}-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dewey.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app: dewey-execution
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.governanceNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app: {{ .Values.networkPolicy.governancePodLabel | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.executiveNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app: {{ .Values.networkPolicy.executivePodLabel | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+  egress: []
+{{- end }}

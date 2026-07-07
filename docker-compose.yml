@@ -1,0 +1,21 @@
+services:
+  dewey:
+    build: .
+    container_name: dewey_execution
+    ports:
+      - "50053:50053"
+    environment:
+      - SERVICE_NAME=dewey-execution
+      - SERVICE_VERSION=0.1.0
+      - GRPC_PORT=50053
+      - DEWEY_DB_PATH=/data/dewey.db
+      - DEWEY_ALLOWED_TABLE=local_backlog
+      - INBOUND_SIGNATURE_HEADER=X-Judy-Signature
+      - INBOUND_SIGNATURE_SECRET=dewey-dev-secret
+      - MAX_CLOCK_SKEW_SECONDS=120
+    volumes:
+      - dewey_data:/data
+    restart: unless-stopped
+
+volumes:
+  dewey_data:

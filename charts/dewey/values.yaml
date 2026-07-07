@@ -1,0 +1,41 @@
+replicaCount: 1
+
+image:
+  repository: dewey-execution
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 50053
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi
+
+env:
+  SERVICE_NAME: dewey-execution
+  SERVICE_VERSION: 0.1.0
+  GRPC_PORT: "50053"
+  DEWEY_DB_PATH: /data/dewey.db
+  DEWEY_ALLOWED_TABLE: local_backlog
+  INBOUND_SIGNATURE_HEADER: X-Judy-Signature
+  MAX_CLOCK_SKEW_SECONDS: "120"
+
+secretEnv:
+  INBOUND_SIGNATURE_SECRET: dewey-dev-secret
+
+persistence:
+  enabled: false
+  size: 1Gi
+
+networkPolicy:
+  enabled: true
+  governanceNamespace: governance-zone
+  governancePodLabel: judy-council
+  executiveNamespace: executive-zone
+  executivePodLabel: doom-executive

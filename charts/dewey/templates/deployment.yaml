@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dewey.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "dewey.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app: dewey-execution
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dewey.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app: dewey-execution
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "dewey.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app: dewey-execution
+    spec:
+      serviceAccountName: {{ include "dewey.fullname" . }}
+      containers:
+        - name: dewey
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.port }}
+          env:
+            - name: SERVICE_NAME
+              value: {{ .Values.env.SERVICE_NAME | quote }}
+            - name: SERVICE_VERSION
+              value: {{ .Values.env.SERVICE_VERSION | quote }}
+            - name: GRPC_PORT
+              value: {{ .Values.env.GRPC_PORT | quote }}
+            - name: DEWEY_DB_PATH
+              value: {{ .Values.env.DEWEY_DB_PATH | quote }}
+            - name: DEWEY_ALLOWED_TABLE
+              value: {{ .Values.env.DEWEY_ALLOWED_TABLE | quote }}
+            - name: INBOUND_SIGNATURE_HEADER
+              value: {{ .Values.env.INBOUND_SIGNATURE_HEADER | quote }}
+            - name: MAX_CLOCK_SKEW_SECONDS
+              value: {{ .Values.env.MAX_CLOCK_SKEW_SECONDS | quote }}
+            - name: INBOUND_SIGNATURE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dewey.fullname" . }}-secrets
+                  key: INBOUND_SIGNATURE_SECRET
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          volumeMounts:
+            - name: dewey-data
+              mountPath: /data
+      volumes:
+        - name: dewey-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "dewey.fullname" . }}-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
