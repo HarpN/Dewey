@@ -80,14 +80,48 @@ docker compose run --rm --build dewey pytest -q
 
 | Variable | Description | Default |
 | --- | --- | --- |
+| `ENVIRONMENT` | Runtime environment hint used for startup validation (`dev`, `staging`, `prod`) | `dev` |
 | `SERVICE_NAME` | Service name | `dewey-execution` |
 | `SERVICE_VERSION` | Version string | `0.1.0` |
 | `GRPC_PORT` | gRPC listen port | `50053` |
+| `GRPC_MAX_WORKERS` | gRPC thread pool worker count | `32` |
+| `GRPC_TLS_ENABLED` | Enable inbound TLS listener | `false` |
+| `GRPC_TLS_SERVER_CERT_PATH` | Server cert path for inbound TLS | empty |
+| `GRPC_TLS_SERVER_KEY_PATH` | Server key path for inbound TLS | empty |
+| `GRPC_TLS_REQUIRE_CLIENT_AUTH` | Require client cert on inbound listener (mTLS) | `false` |
+| `GRPC_TLS_CLIENT_CA_CERT_PATH` | Trusted client CA path for inbound mTLS | empty |
 | `DEWEY_DB_PATH` | SQLite path | `/data/dewey.db` |
 | `DEWEY_ALLOWED_TABLE` | Table allowlist target | `local_backlog` |
 | `INBOUND_SIGNATURE_HEADER` | Signature metadata header | `X-Judy-Signature` |
-| `INBOUND_SIGNATURE_SECRET` | Shared signature secret | `dewey-dev-secret` |
+| `INBOUND_SIGNATURE_SECRET` | Shared signature secret | required |
 | `MAX_CLOCK_SKEW_SECONDS` | Allowed issue-time skew | `120` |
+| `REPLAY_TTL_SECONDS` | Replay protection nonce retention window in seconds | `300` |
+
+### Compose mTLS Profile
+
+Generate local dev certificates first:
+
+```powershell
+./scripts/generate-dev-certs.ps1 -Force
+```
+
+Run Dewey with inbound TLS + client auth:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mtls.yml up --build
+```
+
+Verify certificate chains and mTLS handshakes:
+
+```powershell
+./scripts/verify-mtls.ps1
+```
+
+If Dewey is not running, verify cert trust only:
+
+```powershell
+./scripts/verify-mtls.ps1 -SkipHandshake
+```
 
 ## Kubernetes / Helm
 

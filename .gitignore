@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 *.pyc
 *.db
+certs/*.crt
+certs/*.key
+certs/*.csr
+certs/*.srl
+certs/*.cnf

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -103,6 +103,12 @@ def register_nonce(nonce: str, correlation_id: str, issuer_id: str) -> None:
         )
 
 
+def cleanup_expired_nonces(ttl_seconds: int) -> None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)).replace(microsecond=0).isoformat()
+    with get_connection() as connection:
+        connection.execute("DELETE FROM replay_nonces WHERE seen_at < ?", (cutoff,))
+
+
 def get_entity(entity_id: str) -> dict[str, Any] | None:
     with get_connection() as connection:
         row = connection.execute("SELECT * FROM local_backlog WHERE entity_id = ?", (entity_id,)).fetchone()
@@ -116,7 +122,11 @@ def update_entity(entity_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     status = str(payload.get("status", current["status"]))
     completion = int(payload.get("completion", current["current_completion"]))
+    if completion < 0 or completion > 100:
+        raise ValueError("completion must be between 0 and 100")
     notes = str(payload.get("notes", current["notes"]))
+    if len(notes) > 2000:
+        raise ValueError("notes exceeds maximum length")
 
     with get_connection() as connection:
         # Parameterized query only, no dynamic SQL path.

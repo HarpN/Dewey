@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent import futures
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
 
 import grpc
@@ -10,6 +11,7 @@ from google.protobuf import empty_pb2, json_format, struct_pb2
 from .config import settings
 from .database import (
     append_execution_log,
+    cleanup_expired_nonces,
     execution_count,
     get_entity,
     init_db,
@@ -28,6 +30,7 @@ metrics: dict[str, int] = {
     "rejected_total": 0,
     "replay_rejected_total": 0,
 }
+_metrics_lock = Lock()
 
 
 def _dict_to_struct(payload: dict[str, Any]) -> struct_pb2.Struct:
@@ -102,23 +105,28 @@ def _health(_: empty_pb2.Empty, context: grpc.ServicerContext) -> struct_pb2.Str
 
 def _get_metrics(_: empty_pb2.Empty, context: grpc.ServicerContext) -> struct_pb2.Struct:
     del context
-    payload = dict(metrics)
+    with _metrics_lock:
+        payload = dict(metrics)
     payload["execution_log_count"] = execution_count()
     return _dict_to_struct(payload)
 
 
 def _execute_mandate(request_message: struct_pb2.Struct, context: grpc.ServicerContext) -> struct_pb2.Struct:
-    metrics["requests_total"] += 1
+    with _metrics_lock:
+        metrics["requests_total"] += 1
     raw_payload = _struct_to_dict(request_message)
+    cleanup_expired_nonces(settings.replay_ttl_seconds)
 
     if not _verify_signature(context, raw_payload):
-        metrics["rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
         return struct_pb2.Struct()
 
     try:
         mandate = ExecutionMandate.model_validate(raw_payload)
     except Exception as exc:
-        metrics["rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
         context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
         context.set_details(f"Invalid mandate shape: {exc}")
         return struct_pb2.Struct()
@@ -127,7 +135,8 @@ def _execute_mandate(request_message: struct_pb2.Struct, context: grpc.ServicerC
     action = mandate.mandated_action
 
     if mandate.council_verdict.upper() != "APPROVED":
-        metrics["rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
         append_execution_log(
             correlation_id=metadata.correlation_id,
             issuer_id=metadata.issuer_id,
@@ -144,7 +153,8 @@ def _execute_mandate(request_message: struct_pb2.Struct, context: grpc.ServicerC
 
     temporal_ok, temporal_error = _validate_temporal_window(metadata.issued_at, metadata.expires_at)
     if not temporal_ok:
-        metrics["rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
         append_execution_log(
             correlation_id=metadata.correlation_id,
             issuer_id=metadata.issuer_id,
@@ -160,32 +170,54 @@ def _execute_mandate(request_message: struct_pb2.Struct, context: grpc.ServicerC
         return struct_pb2.Struct()
 
     if nonce_exists(metadata.nonce):
-        metrics["rejected_total"] += 1
-        metrics["replay_rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
+            metrics["replay_rejected_total"] += 1
         context.set_code(grpc.StatusCode.ALREADY_EXISTS)
         context.set_details("Nonce replay detected")
         return struct_pb2.Struct()
 
     if action.target_table != settings.allowed_table:
-        metrics["rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
         context.set_code(grpc.StatusCode.PERMISSION_DENIED)
         context.set_details("Target table is not allowed")
         return struct_pb2.Struct()
 
     if action.action_type not in _ALLOWED_ACTIONS:
-        metrics["rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
         context.set_code(grpc.StatusCode.PERMISSION_DENIED)
         context.set_details("Action type is not allowed")
         return struct_pb2.Struct()
 
     entity = get_entity(action.entity_id)
     if entity is None:
-        metrics["rejected_total"] += 1
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
         context.set_code(grpc.StatusCode.NOT_FOUND)
         context.set_details("Target entity was not found")
         return struct_pb2.Struct()
 
-    updated = update_entity(action.entity_id, action.payload)
+    try:
+        updated = update_entity(action.entity_id, action.payload)
+    except (ValueError, KeyError) as exc:
+        with _metrics_lock:
+            metrics["rejected_total"] += 1
+        append_execution_log(
+            correlation_id=metadata.correlation_id,
+            issuer_id=metadata.issuer_id,
+            nonce=metadata.nonce,
+            action_type=action.action_type,
+            target_table=action.target_table,
+            entity_id=action.entity_id,
+            result="REJECTED",
+            details=f"Execution failed: {exc}",
+        )
+        context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+        context.set_details("Mandate execution failed")
+        return struct_pb2.Struct()
+
     register_nonce(metadata.nonce, metadata.correlation_id, metadata.issuer_id)
     append_execution_log(
         correlation_id=metadata.correlation_id,
@@ -198,7 +230,8 @@ def _execute_mandate(request_message: struct_pb2.Struct, context: grpc.ServicerC
         details="Mandate executed successfully",
     )
 
-    metrics["executed_total"] += 1
+    with _metrics_lock:
+        metrics["executed_total"] += 1
     return _dict_to_struct(
         {
             "committed": True,
@@ -211,7 +244,7 @@ def _execute_mandate(request_message: struct_pb2.Struct, context: grpc.ServicerC
 
 def create_server(bind_address: str | None = None) -> grpc.Server:
     init_db()
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=settings.grpc_max_workers))
 
     handlers = {
         "Health": grpc.unary_unary_rpc_method_handler(
@@ -234,7 +267,30 @@ def create_server(bind_address: str | None = None) -> grpc.Server:
     server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler("dewey.ExecutionService", handlers),))
 
     listen_address = bind_address or f"{settings.host}:{settings.grpc_port}"
-    server.add_insecure_port(listen_address)
+    if settings.grpc_tls_enabled:
+        with open(settings.grpc_tls_server_key_path, "rb") as key_file:
+            private_key = key_file.read()
+        with open(settings.grpc_tls_server_cert_path, "rb") as cert_file:
+            certificate_chain = cert_file.read()
+
+        root_certificates = None
+        if settings.grpc_tls_client_ca_cert_path:
+            with open(settings.grpc_tls_client_ca_cert_path, "rb") as ca_file:
+                root_certificates = ca_file.read()
+
+        credentials = grpc.ssl_server_credentials(
+            [(private_key, certificate_chain)],
+            root_certificates=root_certificates,
+            require_client_auth=settings.grpc_tls_require_client_auth,
+        )
+        bound_port = server.add_secure_port(listen_address, credentials)
+    else:
+        bound_port = server.add_insecure_port(listen_address)
+
+    if not bound_port:
+        raise RuntimeError("Failed to bind Dewey gRPC server")
+
+    server.bound_port = bound_port  # type: ignore[attr-defined]
     return server
 
 

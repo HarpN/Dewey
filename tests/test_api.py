@@ -11,7 +11,7 @@ from google.protobuf import empty_pb2, json_format, struct_pb2
 
 os.environ["DEWEY_DB_PATH"] = "/tmp/dewey_test.db"
 os.environ["INBOUND_SIGNATURE_HEADER"] = "X-Judy-Signature"
-os.environ["INBOUND_SIGNATURE_SECRET"] = "dewey-dev-secret"
+os.environ["INBOUND_SIGNATURE_SECRET"] = "dewey-test-secret"
 
 from app.grpc_server import create_server
 from app.signer import sign_payload
@@ -23,10 +23,10 @@ if _db.exists():
 
 @pytest.fixture(scope="module")
 def channel() -> grpc.Channel:
-    server = create_server(bind_address="127.0.0.1:50063")
+    server = create_server(bind_address="127.0.0.1:0")
     server.start()
 
-    grpc_channel = grpc.insecure_channel("127.0.0.1:50063")
+    grpc_channel = grpc.insecure_channel(f"127.0.0.1:{server.bound_port}")
     grpc.channel_ready_future(grpc_channel).result(timeout=5)
 
     yield grpc_channel
@@ -59,7 +59,7 @@ def _as_struct(payload: dict) -> struct_pb2.Struct:
 
 def _signed_metadata(payload: dict) -> tuple[tuple[str, str], ...]:
     normalized = json_format.MessageToDict(_as_struct(payload))
-    signature = sign_payload("dewey-dev-secret", normalized)
+    signature = sign_payload("dewey-test-secret", normalized)
     return (("x-judy-signature", signature),)
 
 

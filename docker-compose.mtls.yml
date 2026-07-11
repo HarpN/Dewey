@@ -1,0 +1,10 @@
+services:
+  dewey:
+    environment:
+      - GRPC_TLS_ENABLED=true
+      - GRPC_TLS_SERVER_CERT_PATH=/certs/dewey/server.crt
+      - GRPC_TLS_SERVER_KEY_PATH=/certs/dewey/server.key
+      - GRPC_TLS_REQUIRE_CLIENT_AUTH=true
+      - GRPC_TLS_CLIENT_CA_CERT_PATH=/certs/ca/clients-ca.crt
+    volumes:
+      - ./certs:/certs:ro
